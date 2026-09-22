@@ -1,0 +1,12 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nuproj"
+version = "0.1.0"
+description = "Geometry vs. growth decomposition of neutrino mass constraints across the Intertwined model ladder"
+requires-python = ">=3.11"
+
+[tool.setuptools.packages.find]
+where = ["src"]
