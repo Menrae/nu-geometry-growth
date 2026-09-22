@@ -31,3 +31,32 @@ conda-forge build pulls in its own MPI implementation as a dependency.
 system MPI — revisit then with:
 `sudo apt update && sudo apt install -y build-essential gfortran libopenmpi-dev openmpi-bin`
 (the user runs this; not run automatically).
+
+## 2026-09-22 — This machine's shell env can silently redirect installs to the wrong place
+
+While setting up `nuproj`, `conda run -n nuproj pip install cobaya` did **not** install
+into the `nuproj` env — it silently installed cobaya, getdist, and this package into an
+unrelated project's virtualenv (`/workspace/imbh-galactic-nuclei/.venv`), because this
+session's shell already had that other project's `VIRTUAL_ENV`/`PATH` set ahead of
+anything `conda run`/`conda activate` prepends. That pollution has been removed (its
+`pip` was used to uninstall the packages it never should have had). Separately, even
+with the *correct* interpreter, `~/.local/lib/python3.11/site-packages` (a user-site
+directory shared by every Python 3.11 on this machine) was shadowing the conda-forge
+`numpy` inside `nuproj` with a different build — a real risk for a package like CAMB
+that ships compiled extensions built against a specific NumPy ABI.
+
+**Why this matters:** silent env misdirection could mean a run "succeeds" against the
+wrong package versions, or writes into the wrong project entirely, without any error.
+
+**How to apply / fix in place:**
+- `nuproj`'s own `activate.d`/`deactivate.d` hooks now set `PYTHONNOUSERSITE=1` while
+  the env is active, so `conda activate nuproj` alone fixes the user-site shadowing.
+- `conda activate nuproj` on this machine does **not** reliably win the `PATH` race
+  against the ambient shell state. After activating, also run:
+  `export PATH="$(conda info --base)/envs/nuproj/bin:$PATH"`
+  or just call the interpreter by its absolute path,
+  `/home/astro/.conda/envs/nuproj/bin/python`, which is what was used to verify this
+  setup and what any launch command from this project should use to be safe.
+- Before trusting any new-environment install on this machine, verify with
+  `python -c "import X; print(X.__file__)"` that the reported file path is actually
+  inside the intended env, not a lookalike sitting elsewhere.

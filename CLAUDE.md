@@ -40,6 +40,16 @@ jupyter; cobaya via pip since it isn't on conda-forge). Rebuild with:
 mamba env create -f environment.yml
 ```
 
+**Known gotcha on this machine:** shell sessions here can already have another
+project's virtualenv on `PATH`/`VIRTUAL_ENV`, which `conda activate`/`conda run` don't
+reliably override. After activating, confirm with `which python` — if it's not under
+`.../envs/nuproj/bin`, run
+`export PATH="$(conda info --base)/envs/nuproj/bin:$PATH"`, or just call the
+interpreter by its absolute path (`.../envs/nuproj/bin/python`). See
+`docs/notes/decisions.md` (2026-09-22 entry) for how this was found and why the env's
+`activate.d` hook also sets `PYTHONNOUSERSITE=1` to stop a shared `~/.local`
+site-packages directory from shadowing conda-forge packages like NumPy.
+
 ## Layout
 
 ```
