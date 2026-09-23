@@ -114,3 +114,24 @@ in the library proper is verified by a genuinely separate calculation, not by it
 loop (e.g. per-model-per-dataset in a later analysis script), consider caching
 `oscillation_reference_samples()`'s output per hierarchy rather than redrawing it every call —
 it doesn't depend on the cosmological chain at all.
+
+## 2026-09-23 — Warm-up chain choice: DESI DR2 `base_mnu`, Planck2018-Plik CMB variant
+
+Downloaded the DESI DR2 `base_mnu` chain into `chains/public/desi_dr2_base_mnu_cmb_bao/`
+(gitignored; regenerate with the `curl` loop documented in `notebooks/01_warmup.ipynb`'s
+first cell, or browse the source directory at
+`https://data.desi.lbl.gov/public/papers/y3/bao-cosmo-params/cobaya/base_mnu/`) to run
+`notebooks/01_warmup.ipynb` against. Three CMB-likelihood variants exist for this model
+(differing in which high-ℓ Planck likelihood is used: Plik, NPIPE-CamSpec, or Hillipop).
+Picked the **Plik TTTEEE** variant specifically because it's the same underlying Planck 2018
+Plik likelihood Intertwined itself uses (their Table 1/§2.2 dataset list), making this the
+closest available public chain to Intertwined's own `CMB+DESI` baseline for a qualitative
+comparison, even though it still differs from Intertwined's exact combination (their CMB
+likelihood also adds ACT DR6, SPT-3G and BICEP/Keck; this chain has none of those; and it
+has no supernova sample at all, whereas Intertwined always includes one).
+
+**Why this matters for interpretation:** the resulting bound (~0.069 eV) is looser than
+Intertwined's ~0.061 eV baseline, and every downstream diagnostic (tail probability,
+overlap, Bayes factor) shifts in the direction that a looser bound implies. That's expected
+from the missing datasets, not a bug -- see the notebook's closing markdown cell for the
+full reasoning per diagnostic.
