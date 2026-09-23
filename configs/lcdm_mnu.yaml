@@ -14,6 +14,17 @@
 
 theory:
   camb:
+    # Force cobaya to use the already-installed conda-forge CAMB (decisions.md,
+    # 2026-09-22: "CAMB installed via conda-forge, not Cobaya's built-in installer").
+    # Without this, cobaya's default behavior -- since `packages_path` is set below,
+    # for the other four likelihood components' data -- is to try to git-clone and
+    # build its own copy of CAMB from source the first time a real (non `--test`)
+    # sampling run actually starts, silently ignoring the conda-forge install and
+    # requiring a Fortran compiler neither this project's environment.yml nor
+    # CLAUDE.md's "no apt without asking" rule accounts for. `--test` mode doesn't
+    # exercise this code path, which is why `cobaya-run --test` alone didn't catch
+    # it -- found by actually running scripts/run_chain.sh end-to-end.
+    path: global
     extra_args:
       # Intertwined footnote 3 (p.6): every free-Sigma m_nu run uses a degenerate
       # (three-equal-mass) hierarchy. This is also CAMB's own default, but set

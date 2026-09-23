@@ -8,6 +8,10 @@
 
 theory:
   camb:
+    # Force the already-installed conda-forge CAMB -- see lcdm_mnu.yaml's comment on
+    # this same line for why it's needed (a real run would otherwise silently try to
+    # git-clone and build its own CAMB from source instead).
+    path: global
     extra_args:
       num_massive_neutrinos: 3
       neutrino_hierarchy: degenerate

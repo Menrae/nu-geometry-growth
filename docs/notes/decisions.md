@@ -337,3 +337,56 @@ thread) and is a reasonable choice — but if running two configs simultaneously
 MPI ranks across both on this 10-core machine, as asked about directly), there isn't
 enough headroom for more than `OMP_NUM_THREADS=1` per rank, which is also the
 throughput-optimal choice per the measurements above.
+
+## 2026-09-23 — `scripts/run_chain.sh` de-hardcoded; `theory.camb.path: global` added to both configs
+
+Two real bugs found by actually running `scripts/run_chain.sh` end-to-end (not just
+`cobaya-run --test`) on the machine where chains will really be launched, which is a
+*different* machine from the sandbox this project was built in:
+
+**1. Hardcoded interpreter paths.** `scripts/run_chain.sh` had `PYTHON=/home/astro/
+.conda/envs/nuproj/bin/python` and the equivalent for `mpirun` — paths specific to the
+sandbox this project was scaffolded in. On the machine actually meant to run long
+chains (`nuproj` installed via `miniforge3`, a different path entirely), every
+invocation failed instantly, and launching it via `tmux new -s NAME -d 'CMD'` hid the
+failure completely: when the wrapped command exits immediately, tmux closes the session
+with it, so `tmux ls` afterward shows no server at all — no error, no clue. **Fixed:**
+the script now uses bare `python`/`mpirun` off `PATH`, requires the `nuproj` env to
+already be `conda activate`d in the calling shell, and checks that explicitly up front
+(`python -c "import cobaya"`, `command -v mpirun`) with a clear error message instead of
+failing deep inside an MPI subprocess. Also swapped the Linux-only `nproc` core-count
+check for a portable `nproc || sysctl -n hw.ncpu || echo 1` fallback, and dropped the
+Open-MPI-specific `-x` environment-propagation flags (unnecessary for a local run under
+either Open MPI or MPICH, and would break on whichever one this isn't).
+
+**2. `packages_path` silently triggers a from-source CAMB build on a real run.**
+`cobaya-run configs/lcdm_mnu.yaml --test` had been re-run many times over the course of
+this project and always correctly reported using the conda-forge CAMB (`` `camb` module
+loaded successfully from .../site-packages/camb ``). But the *first real* (non `--test`)
+`cobaya run` behaves differently: with `packages_path: packages` set (needed for the
+other four likelihood components' data) and no explicit override on the `camb` theory
+block, cobaya's real run path decided to `git`-clone CAMB from GitHub straight into
+`packages/code/CAMB` and use whatever it found/built there instead of the already-
+working conda-forge install — silently contradicting the 2026-09-22 decision to use
+conda-forge CAMB specifically to avoid needing a Fortran compiler. (In the sandbox this
+even appeared to produce a `camblib.so`, but one built for a different glibc than the
+sandbox's, so it failed outright with a `GLIBC_2.35 not found` error — on a machine that
+*does* have a working toolchain, this would instead have meant a real, slow, unplanned
+source build the first time either config was actually launched for real.) **Fixed:**
+added `theory.camb.path: global` to both `configs/lcdm_mnu.yaml` and `configs/
+w0wa_mnu.yaml` — cobaya's own documented mechanism (in `cobaya/theories/camb/camb.yaml`'s
+comments) for forcing the already-importable system/conda CAMB, bypassing
+`packages_path` for this one component. Verified by actually starting a real (non
+`--test`) run after the fix: it now logs `camb module loaded successfully from
+.../site-packages/camb` and reaches `[mcmc] Sampling!` with zero interaction with
+`packages/code/`.
+
+**Why `--test` never caught either of these:** `--test` exercises `Model`
+initialization and exits before actually calling `mcmc`'s run loop, which is where both
+of the above are triggered (the interpreter-path bug only shows up because `--test` was
+always run directly, never through `scripts/run_chain.sh`'s `mpirun` wrapper; the CAMB
+auto-install only triggers on a real sampling run, not `--test`'s lighter path). **How
+to apply:** `--test` is necessary but not sufficient for validating a config or launch
+script change — anything that touches how the run is actually *launched* (the shell
+script, `packages_path` behavior) needs at least a brief real run, killed early, to
+confirm end-to-end.

@@ -38,11 +38,28 @@ fi
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 CONFIG="$REPO_ROOT/configs/${NAME}.yaml"
 OUT_DIR="$REPO_ROOT/chains/${NAME}"
-# Absolute paths -- see CLAUDE.md's environment gotcha: ambient shell state on this
-# machine can otherwise silently pick up the wrong Python/env (and plain `mpirun`
-# isn't even on the ambient PATH at all).
-PYTHON="/home/astro/.conda/envs/nuproj/bin/python"
-MPIRUN="/home/astro/.conda/envs/nuproj/bin/mpirun"
+# Deliberately *not* hardcoded to any machine-specific env path (e.g.
+# /home/astro/.conda/envs/nuproj/bin/python) -- this script needs to work on
+# whatever machine you actually run long chains on, which may not be the same one
+# this project was scaffolded on. Instead, this requires the `nuproj` conda/mamba
+# env to already be *activated* in the calling shell (`conda activate nuproj`),
+# and just uses `python`/`mpirun` off PATH. Checked explicitly below so a missing
+# activation fails loudly here, in the foreground, rather than causing `mpirun`/
+# cobaya to silently fail deep inside an MPI subprocess where tmux -d would hide it.
+PYTHON="python"
+MPIRUN="mpirun"
+
+if ! "$PYTHON" -c "import cobaya" >/dev/null 2>&1; then
+    echo "ERROR: 'python -c \"import cobaya\"' failed. Activate the nuproj env" \
+         "first, e.g.: conda activate nuproj (or: mamba activate nuproj)" >&2
+    exit 1
+fi
+if ! command -v "$MPIRUN" >/dev/null 2>&1; then
+    echo "ERROR: 'mpirun' not found on PATH. It should come bundled with the" \
+         "nuproj env's mpi4py conda-forge install -- activate nuproj first, or" \
+         "rebuild the env with: mamba env create -f environment.yml" >&2
+    exit 1
+fi
 
 if [[ ! -f "$CONFIG" ]]; then
     echo "No such config: $CONFIG" >&2
@@ -64,7 +81,7 @@ export PYTHONNOUSERSITE=1
 # know what you're doing (e.g. running only one config alone).
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 
-AVAILABLE_CORES="$(nproc)"
+AVAILABLE_CORES="$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 1)"
 REQUESTED_CORES=$((NPROC * OMP_NUM_THREADS))
 if (( REQUESTED_CORES > AVAILABLE_CORES )); then
     echo "WARNING: requesting $NPROC MPI processes x $OMP_NUM_THREADS OpenMP" \
@@ -80,6 +97,10 @@ echo "Cobaya output: $OUT_DIR/${NAME}.<n>.txt etc."
 echo "Run log:       $LOG_FILE"
 
 cd "$REPO_ROOT"
-"$MPIRUN" -np "$NPROC" -x OMP_NUM_THREADS -x PYTHONNOUSERSITE \
+# No -x/-genv flags: this is always a local (single-machine) run, and both Open MPI
+# and MPICH inherit the launching shell's environment for local ranks by default, so
+# OMP_NUM_THREADS/PYTHONNOUSERSITE (already exported above) reach every rank without
+# needing implementation-specific propagation flags.
+"$MPIRUN" -np "$NPROC" \
     "$PYTHON" -m cobaya run "$CONFIG" "${RESUME_FLAG[@]}" 2>&1 \
     | tee -a "$LOG_FILE"
