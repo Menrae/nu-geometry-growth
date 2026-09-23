@@ -135,3 +135,152 @@ Intertwined's ~0.061 eV baseline, and every downstream diagnostic (tail probabil
 overlap, Bayes factor) shifts in the direction that a looser bound implies. That's expected
 from the missing datasets, not a bug -- see the notebook's closing markdown cell for the
 full reasoning per diagnostic.
+
+## 2026-09-23 — Reduced-likelihood combination: Planck-lite CMB + tau prior + Planck-2018 lensing (native) + DESI DR2 BAO + Pantheon+
+
+Surveyed what's actually installed in the `nuproj` Cobaya (v3.6.2) for the "reduced
+Cobaya+CAMB likelihood" CLAUDE.md calls for, rather than assuming from memory (rule 1).
+Checked the package's bundled `likelihoods/` directory directly plus `pip show` for
+separately-distributed likelihood packages (HiLLiPoP, Lollipop, Planck PR4 lensing,
+ACT DR6 lensing — none of those four are installed).
+
+**Chosen combination:**
+- **High-ell CMB:** `planck_2018_highl_plik.TTTEEE_lite_native` — the plik-lite
+  compressed spectrum, kept as full TT+TE+EE (not TT-only). "Native" here means a pure
+  Python/dataset implementation with no dependency on the compiled `clik` C library,
+  which the full (non-lite) Plik likelihood needs along with a ~1.4 GB data file.
+  Speed ~200 evaluations/s.
+- **Low-ell:** a Gaussian prior on `tau`, `N(0.07, 0.02)`, in place of a real low-l EE
+  likelihood (Cobaya ships this exact preset as `gauss_prior` in its `cosmo_input`
+  module). At low multipoles the EE signal mainly pins down the reionization optical
+  depth `tau`, which is otherwise degenerate with the primordial amplitude `As` (only
+  `As * exp(-2*tau)` is well constrained by the rest of the spectrum) — substituting a
+  literature Gaussian for the full low-l EE likelihood is a standard fast-MCMC shortcut
+  that costs precision on `tau` itself but has negligible effect on `Sigma m_nu`, which
+  is what this project actually needs. It also avoids needing the low-l `clik` data
+  products.
+- **CMB lensing:** `planck_2018_lensing.native` (no `clik` dependency, speed ~50/s).
+- **BAO:** `bao.desi_dr2.desi_bao_all` — matches the proposal's DESI DR2 requirement.
+- **SNe:** `sn.pantheonplus` — matches the proposal's Pantheon+ requirement.
+
+All five components are bundled with cobaya 3.6.2 already and need no compiled `clik`
+library and no extra `pip install` — so no apt/compiler step is needed for this
+combination (consistent with the 2026-09-22 "no apt packages" entry above).
+
+**Why the lensing choice matters here specifically:** this project's whole point is
+separating geometry from growth, and CMB lensing reconstruction is the main growth-channel
+information source in this pipeline (see `docs/notes/split_method.md`). `planck_2018_lensing`
+is measurably weaker than the PR4 (Planck) + ACT DR6 lensing combination that both anchor
+papers (Intertwined, Loverde & Weiner) actually use — but PR4/ACT DR6 lensing aren't
+installed here and come from separate pip packages (`planckpr4lensing`, `act_dr6_lenslike`)
+whose build requirements haven't been checked yet. Asked the user directly which to use
+given this tradeoff; **decision: start with Planck 2018 lensing (native) now** to get the
+full model ladder (LambdaCDM+mnu, w0waCDM+mnu, LambdaCDM+curvature+mnu) running end-to-end
+with zero extra install risk, and revisit PR4+ACT DR6 lensing as a planned upgrade once the
+pipeline is validated — not a dropped idea.
+
+**How to apply:** all `configs/*.yaml` for this project's reduced-likelihood runs should
+use exactly these five components until/unless the PR4+ACT DR6 lensing upgrade happens,
+at which point update this entry and add a corresponding note in `split_method.md` about
+tightened growth-channel information changing the quantitative (though hopefully not
+qualitative) comparison to Table 4.
+
+## 2026-09-23 — First two ladder configs: priors, neutrino/DE treatment, proposal covmat, MPI sizing
+
+Wrote `configs/lcdm_mnu.yaml` and `configs/w0wa_mnu.yaml` (rungs 1 and 2 of the model
+ladder) using the five likelihood components from the entry above. Every sampled
+parameter's prior is copied directly from Intertwined Table 1 (`docs/notes/
+intertwined_summary.md` Sec. 4, arXiv:2607.01226v2 p.7) except two intentional
+deviations, both commented in-line in the YAML itself so they're visible at the point
+they apply, not just here:
+
+- **`tau`** uses the Gaussian prior `N(0.07, 0.02)` from the likelihood-choice entry
+  above, rather than Intertwined's flat `U(0.01, 0.8)` against a real low-ell EE
+  likelihood we don't have installed.
+- **`nnu` (Neff) is fixed at 3.044**, CAMB/cobaya's standard value accounting for
+  non-instantaneous neutrino decoupling, rather than Intertwined's rounded fixed value
+  of 3.04. The 0.004 difference is far smaller than anything either likelihood can
+  resolve and has no bearing on Sigma m_nu.
+
+Everything else — `ombh2`, `omch2`, `theta_MC_100` (Cobaya's `theta_MC_100` prior of
+`[0.5, 10]` for "100 theta_s" turns out to already be the literal convention Intertwined's
+Table 1 uses, not just a coincidental match — this is a standard CosmoMC-family
+parameterization both share), `logA`, `ns`, `mnu` (`num_massive_neutrinos: 3`,
+`neutrino_hierarchy: degenerate`, `U(0,5) eV`), and, for `w0wa_mnu.yaml`, `w`/`wa` (CPL
+dark energy, `dark_energy_model: ppf` since `w0` is allowed below -1) — match Table 1
+and footnote 3 exactly, param-name-for-param-name against cobaya's own bundled
+`cosmo_input` presets (verified by reading `cobaya/cosmo_input/input_database.py`
+directly rather than assuming syntax from memory).
+
+**Sampler:** `Rminus1_stop: 0.01` — stricter than Intertwined's own `R-1 <~ 0.02`
+(`intertwined_summary.md` Sec. 1), per an explicit request for this project's own runs.
+Noted as a deliberate deviation (stricter, not an error) so tighter error bars than
+Table 4's aren't later mistaken for a discrepancy.
+
+**Proposal covmat:** both configs seed `mcmc: covmat:` from
+`chains/public/desi_dr2_base_mnu_cmb_bao/chain.covmat` — the real public DESI DR2
+`base_mnu` posterior downloaded for the warm-up notebook. Its column names
+(`ombh2, omch2, theta_MC_100, tau, mnu, logA, ns`) are exactly this project's own
+parameter names (both configs deliberately use CAMB's short aliases `ombh2`/`omch2`
+rather than cobaya's canonical `omegabh2`/`omegach2`, specifically so this covmat's
+header matches verbatim with no renaming needed — confirmed by reading cobaya's covmat
+-loading code in `cobaya/sampler.py`, which matches by literal string against each
+parameter's name and any declared `renames`). **Why bother:** starting from a real
+near-neighbor posterior's covariance means the sampler doesn't have to learn the
+parameter degeneracies (e.g. the omch2-theta_MC_100-mnu geometric degeneracy) from
+scratch, which is normally what costs the most burn-in time. `w0wa_mnu.yaml`'s `w`/`wa`
+aren't in that covmat (the DESI chain is LambdaCDM+mnu only) — cobaya fills only the
+shared parameters and falls back to the reference-distribution widths for `w`/`wa`,
+logged automatically as "Missing proposal covariance for params ['w', 'wa']" when
+`cobaya-run --test` is run (confirmed — see below). **Caveat:** this covmat lives under
+the gitignored `chains/public/`, so a fresh clone of this repo needs to regenerate it
+first (curl loop in `notebooks/01_warmup.ipynb`'s first cell) before either config's
+`--test` will find it.
+
+**Validation:** ran `cobaya-run configs/lcdm_mnu.yaml --test` and `cobaya-run
+configs/w0wa_mnu.yaml --test` — both report "Test initialization successful." Cobaya's
+own built-in speed-measurement (`[model] Measuring speeds...`, part of `--test`) gives
+the actual per-component evaluation rates directly, rather than a hand-rolled timer:
+
+| Component | lcdm_mnu (evals/s) | w0wa_mnu (evals/s) |
+|---|---|---|
+| `planck_2018_highl_plik.TTTEEE_lite_native` | 844 | 1110 |
+| `planck_2018_lensing.native` | 1600 | 4330 |
+| `bao.desi_dr2.desi_bao_all` | 576 | 1350 |
+| `sn.pantheonplus` | 117 | 90.7 |
+| `camb` (Cls from existing transfer functions — fast block: `logA`, `ns`) | 8.13 | 9.23 |
+| `camb.transfers` (new transfer functions — **slow block**: `ombh2,omch2,theta,tau,mnu`[,`w`,`wa`]) | **2.64** | **2.47** |
+
+The likelihoods themselves are never the bottleneck (>100/s each); every evaluation is
+gated by CAMB's transfer-function recomputation whenever a "slow" parameter changes
+(cobaya's own oversampling scheme already exploits this: nuisance parameters like
+`A_planck` get 8-9 free re-tries per slow step since they don't need CAMB at all).
+
+**Runtime estimate to `R-1 < 0.01`, given 10 cores (`nproc`) on this machine:**
+Rule-of-thumb from CosmoMC/Cobaya practice (not from either anchor paper — this is
+generic MCMC-convergence folklore, not a citable published number, and is flagged here
+as an estimate, not a fact): reaching `R-1 ~ 0.01` for a similarly-sized posterior
+(8 free parameters for `lcdm_mnu`, 10 for `w0wa_mnu`) with a *good* starting covmat
+typically takes on the order of 5,000-50,000 accepted samples per chain; at a
+Metropolis acceptance rate of roughly 25% (typical when well-tuned), that's
+~20,000-200,000 *proposed* slow-block evaluations per chain. Dividing by the measured
+slow-block rate above:
+
+- **`lcdm_mnu`** (2.64 evals/s): ~2-21 hours per chain.
+- **`w0wa_mnu`** (2.47 evals/s, plus 2 extra free parameters so likely nearer the high
+  end of the range): ~2-23 hours per chain, plausibly longer.
+
+Running N chains under MPI does **not** shorten this per-chain estimate — each chain
+still needs to individually rack up that many steps for the Gelman-Rubin statistic to
+mean anything; more chains just let you obtain that many *independent* chains at the
+same wall-clock time (and MPI ranks are what R-1 is computed across in the first
+place). **Chose 4 MPI processes** as the default in `scripts/run_chain.sh` usage below:
+enough for a robust R-1 estimate, while leaving 6 of this machine's 10 cores free for
+other work (notebooks, editing) while a chain runs in the background. Both estimated
+runtimes are far past CLAUDE.md's 10-minute auto-launch limit, so neither chain is
+started here — only the launch commands are provided, to be run by the user in `tmux`.
+
+**How to apply:** if the real run's `R-1` trace (printed periodically to
+`chains/<name>/<name>.log`) is converging much faster or slower than this estimate once
+it's actually running, note the observed rate here so future ladder rungs (curvature)
+can be estimated from real data instead of the folklore range above.

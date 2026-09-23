@@ -1,0 +1,118 @@
+# Rung 1 of the model ladder: flat LambdaCDM + free Sigma m_nu.
+#
+# Reduced likelihood (docs/notes/decisions.md, 2026-09-23 entry: "Reduced-likelihood
+# combination"): Planck-lite high-ell CMB + a Gaussian tau prior in place of a real
+# low-ell EE likelihood + Planck 2018 lensing (native) + DESI DR2 BAO + Pantheon+.
+# All five components are already bundled in cobaya 3.6.2 with no compiled `clik`
+# dependency -- see that decisions.md entry for the CMB-lensing-vs-growth-channel
+# tradeoff this implies.
+#
+# Priors and neutrino treatment are matched to Intertwined (arXiv:2607.01226v2) Table 1
+# (docs/notes/intertwined_summary.md Sec. 4) wherever this reduced likelihood samples
+# the same parameter. Deviations from Table 1 are called out below with a comment at
+# the point where they occur -- do not assume anything unmarked differs.
+
+theory:
+  camb:
+    extra_args:
+      # Intertwined footnote 3 (p.6): every free-Sigma m_nu run uses a degenerate
+      # (three-equal-mass) hierarchy. This is also CAMB's own default, but set
+      # explicitly so the choice is visible in the config rather than implicit.
+      num_massive_neutrinos: 3
+      neutrino_hierarchy: degenerate
+      # Intertwined Table 4 fixes Neff = 3.04 (rounded). We instead use CAMB/cobaya's
+      # standard nnu = 3.044 (the modern value accounting for non-instantaneous
+      # neutrino decoupling) rather than hand-matching the older rounded 3.04 --
+      # DEVIATION, logged here: the 0.004 difference is far below any of our
+      # posterior's resolving power and has no bearing on Sigma m_nu, which is what
+      # this project's ladder actually tracks.
+      nnu: 3.044
+      theta_H0_range: [20, 100]
+
+likelihood:
+  planck_2018_highl_plik.TTTEEE_lite_native:
+  planck_2018_lensing.native:
+  bao.desi_dr2.desi_bao_all:
+  sn.pantheonplus:
+
+params:
+  # --- Early-universe / geometry parameters, Intertwined Table 1 (p.7) ---
+  ombh2:
+    prior: {min: 0.005, max: 0.1}
+    ref: {dist: norm, loc: 0.0224, scale: 0.0001}
+    proposal: 0.0001
+    latex: \Omega_\mathrm{b} h^2
+  omch2:
+    prior: {min: 0.001, max: 0.99}
+    ref: {dist: norm, loc: 0.12, scale: 0.001}
+    proposal: 0.0005
+    latex: \Omega_\mathrm{c} h^2
+  theta_MC_100:
+    prior: {min: 0.5, max: 10}
+    ref: {dist: norm, loc: 1.04109, scale: 0.0004}
+    proposal: 0.0002
+    latex: 100\theta_\mathrm{MC}
+    drop: true
+  cosmomc_theta:
+    value: 'lambda theta_MC_100: 1.e-2*theta_MC_100'
+    derived: false
+  # DEVIATION from Table 1: Intertwined samples tau ~ U(0.01, 0.8) against a real
+  # low-ell EE likelihood. Our reduced likelihood drops the low-ell EE data entirely
+  # and substitutes a Gaussian prior tau ~ N(0.07, 0.02) instead (decisions.md,
+  # 2026-09-23) -- explained there: tau is otherwise only pinned down by low-ell EE,
+  # and only enters our science target (Sigma m_nu) through the As*exp(-2 tau)
+  # degeneracy, so a literature prior costs little for this project's purposes.
+  tau:
+    prior: {dist: norm, loc: 0.07, scale: 0.02}
+    ref: {dist: norm, loc: 0.07, scale: 0.01}
+    proposal: 0.005
+    latex: \tau_\mathrm{reio}
+  logA:
+    prior: {min: 1.61, max: 3.91}
+    ref: {dist: norm, loc: 3.05, scale: 0.001}
+    proposal: 0.001
+    latex: \log(10^{10} A_\mathrm{s})
+    drop: true
+  As:
+    value: 'lambda logA: 1e-10*np.exp(logA)'
+    latex: A_\mathrm{s}
+  ns:
+    prior: {min: 0.8, max: 1.2}
+    ref: {dist: norm, loc: 0.965, scale: 0.004}
+    proposal: 0.002
+    latex: n_\mathrm{s}
+  # --- The parameter this whole project is about ---
+  mnu:
+    prior: {min: 0, max: 5}
+    ref: {dist: norm, loc: 0.02, scale: 0.1}
+    proposal: 0.03
+    latex: \sum m_\nu
+  # --- Derived, for post-processing (Table 7 comparison, geometry/growth split) ---
+  H0: {latex: H_0}
+  omegam: {latex: '\Omega_\mathrm{m}'}
+  sigma8: {latex: \sigma_8}
+  S8: {derived: 'lambda sigma8, omegam: sigma8*(omegam/0.3)**0.5', latex: S_8}
+
+sampler:
+  mcmc:
+    # Intertwined itself stops at R-1 <~ 0.02 (intertwined_summary.md Sec. 1). We use
+    # a stricter 0.01 here per an explicit request for this project's own chains --
+    # DEVIATION (stricter, not looser): logged so the difference in stopping
+    # criterion isn't mistaken for a discrepancy if our error bars come out tighter.
+    Rminus1_stop: 0.01
+    Rminus1_cl_stop: 0.2
+    max_tries: 1000
+    # Seeds the proposal covariance from a real posterior over a closely related
+    # model (DESI DR2 base_mnu, CMB+BAO, no SN -- chains/public/, see
+    # notebooks/01_warmup.ipynb) instead of learning it from scratch. Column names
+    # ombh2/omch2/theta_MC_100/tau/mnu/logA/ns in that chain's .covmat match this
+    # config's parameter names directly, so cobaya fills those from the file and
+    # falls back to the reference/proposal widths above for anything else (see
+    # decisions.md, 2026-09-23 "Reduced-likelihood combination" entry). Requires that
+    # chain to be downloaded first -- it's gitignored; regenerate with the curl loop
+    # in notebooks/01_warmup.ipynb's first cell if this path is missing.
+    covmat: chains/public/desi_dr2_base_mnu_cmb_bao/chain.covmat
+
+output: chains/lcdm_mnu/lcdm_mnu
+
+packages_path: packages

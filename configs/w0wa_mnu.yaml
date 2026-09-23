@@ -1,0 +1,109 @@
+# Rung 2 of the model ladder: w0waCDM (CPL dark energy) + free Sigma m_nu.
+#
+# Same reduced likelihood and parameter treatment as configs/lcdm_mnu.yaml -- see that
+# file's header comments and docs/notes/decisions.md (2026-09-23 entries) for the
+# reasoning behind each choice. This file only adds the two dark-energy parameters;
+# everything else is identical on purpose, so the geometry/growth comparison across
+# rungs isn't confounded by an unrelated config difference.
+
+theory:
+  camb:
+    extra_args:
+      num_massive_neutrinos: 3
+      neutrino_hierarchy: degenerate
+      nnu: 3.044  # see lcdm_mnu.yaml: DEVIATION from Intertwined's fixed 3.04, negligible
+      theta_H0_range: [20, 100]
+      # PPF dark-energy perturbation model is required once w0 is allowed to cross
+      # the phantom divide (w < -1), which Intertwined's own w0 prior [-3, 1] permits.
+      # This is cobaya's own standard choice for w0waCDM (cosmo_input's "de_w_wa"
+      # preset uses the same extra_arg) -- not a deviation, just following the
+      # standard recipe for this model class.
+      dark_energy_model: ppf
+
+likelihood:
+  planck_2018_highl_plik.TTTEEE_lite_native:
+  planck_2018_lensing.native:
+  bao.desi_dr2.desi_bao_all:
+  sn.pantheonplus:
+
+params:
+  # --- Early-universe / geometry parameters, Intertwined Table 1 (p.7) ---
+  ombh2:
+    prior: {min: 0.005, max: 0.1}
+    ref: {dist: norm, loc: 0.0224, scale: 0.0001}
+    proposal: 0.0001
+    latex: \Omega_\mathrm{b} h^2
+  omch2:
+    prior: {min: 0.001, max: 0.99}
+    ref: {dist: norm, loc: 0.12, scale: 0.001}
+    proposal: 0.0005
+    latex: \Omega_\mathrm{c} h^2
+  theta_MC_100:
+    prior: {min: 0.5, max: 10}
+    ref: {dist: norm, loc: 1.04109, scale: 0.0004}
+    proposal: 0.0002
+    latex: 100\theta_\mathrm{MC}
+    drop: true
+  cosmomc_theta:
+    value: 'lambda theta_MC_100: 1.e-2*theta_MC_100'
+    derived: false
+  # DEVIATION from Table 1 -- see lcdm_mnu.yaml: Gaussian tau prior replaces the real
+  # low-ell EE likelihood.
+  tau:
+    prior: {dist: norm, loc: 0.07, scale: 0.02}
+    ref: {dist: norm, loc: 0.07, scale: 0.01}
+    proposal: 0.005
+    latex: \tau_\mathrm{reio}
+  logA:
+    prior: {min: 1.61, max: 3.91}
+    ref: {dist: norm, loc: 3.05, scale: 0.001}
+    proposal: 0.001
+    latex: \log(10^{10} A_\mathrm{s})
+    drop: true
+  As:
+    value: 'lambda logA: 1e-10*np.exp(logA)'
+    latex: A_\mathrm{s}
+  ns:
+    prior: {min: 0.8, max: 1.2}
+    ref: {dist: norm, loc: 0.965, scale: 0.004}
+    proposal: 0.002
+    latex: n_\mathrm{s}
+  # --- The parameter this whole project is about ---
+  mnu:
+    prior: {min: 0, max: 5}
+    ref: {dist: norm, loc: 0.02, scale: 0.1}
+    proposal: 0.03
+    latex: \sum m_\nu
+  # --- Dark energy, Intertwined Table 1 (p.7): w0 in [-3, 1], wa in [-3, 2] ---
+  w:
+    prior: {min: -3, max: 1}
+    ref: {dist: norm, loc: -0.99, scale: 0.02}
+    proposal: 0.02
+    latex: w_{0,\mathrm{DE}}
+  wa:
+    prior: {min: -3, max: 2}
+    ref: {dist: norm, loc: 0, scale: 0.05}
+    proposal: 0.05
+    latex: w_{a,\mathrm{DE}}
+  # --- Derived, for post-processing (Table 7 comparison, geometry/growth split) ---
+  H0: {latex: H_0}
+  omegam: {latex: '\Omega_\mathrm{m}'}
+  sigma8: {latex: \sigma_8}
+  S8: {derived: 'lambda sigma8, omegam: sigma8*(omegam/0.3)**0.5', latex: S_8}
+
+sampler:
+  mcmc:
+    # See lcdm_mnu.yaml: stricter than Intertwined's own R-1 <~ 0.02, by request.
+    Rminus1_stop: 0.01
+    Rminus1_cl_stop: 0.2
+    max_tries: 1000
+    # Seeded from the same DESI DR2 base_mnu covmat as lcdm_mnu.yaml. That chain has
+    # no w/wa columns (it's a LambdaCDM+mnu run), so cobaya fills only the shared
+    # parameters (ombh2, omch2, theta_MC_100, tau, mnu, logA, ns) from the file and
+    # falls back to the reference/proposal widths above for w and wa, which will be
+    # learned online during burn-in as usual.
+    covmat: chains/public/desi_dr2_base_mnu_cmb_bao/chain.covmat
+
+output: chains/w0wa_mnu/w0wa_mnu
+
+packages_path: packages
