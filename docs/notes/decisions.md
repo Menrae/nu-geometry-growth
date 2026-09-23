@@ -284,3 +284,56 @@ started here — only the launch commands are provided, to be run by the user in
 `chains/<name>/<name>.log`) is converging much faster or slower than this estimate once
 it's actually running, note the observed rate here so future ladder rungs (curvature)
 can be estimated from real data instead of the folklore range above.
+
+## 2026-09-23 — `scripts/run_chain.sh` now pins `OMP_NUM_THREADS`; runtime estimate revised upward
+
+The speeds measured in the entry above were taken with `OMP_NUM_THREADS` **unset**,
+during a lone `--test` process with no other MPI ranks competing for cores. CAMB's
+Fortran backend is OpenMP-parallelized and, left unset, defaults to using every visible
+core *per process* — fine for one process alone, but if `scripts/run_chain.sh` had
+launched multiple MPI ranks without pinning thread count, each rank would *also* try to
+grab all 10 cores, oversubscribing the machine by up to `NPROC x 10`-way and making the
+real run slower than the single-process benchmark suggested. This was caught before any
+real run was launched.
+
+**Measured the actual OpenMP scaling directly** (rather than guessing) by re-running
+`cobaya-run configs/lcdm_mnu.yaml --test` at fixed thread counts:
+
+| `OMP_NUM_THREADS` | `camb.transfers` speed (evals/s, one process, no contention) |
+|---|---|
+| 1 | 0.709 |
+| 2 | 1.41 |
+| 4 | 2.28 |
+| 5 | 2.34 |
+| 10 | 2.84 |
+
+Scaling saturates hard beyond ~4 threads (only +25% going from 4 to 10 threads, i.e.
+2.5x more cores for 1.25x more speed) — CAMB's line-of-sight integration has limited
+internal parallelism. Since **total throughput = (MPI ranks) x (per-rank speed)** and
+this project wants as many independent chains as it can get anyway (more chains = a
+better-defined Gelman-Rubin statistic, not just faster wall-clock), the numbers say
+`OMP_NUM_THREADS=1` with one rank per core is at least as good in aggregate as any
+higher-thread-count split (10 ranks x 0.709/s = 7.09/s aggregate vs. 5 ranks x 2
+threads x 1.41/s = 7.05/s vs. 1 rank x 10 threads x 2.84/s = 2.84/s) *and* gives more
+independent chains for the same total compute. `scripts/run_chain.sh` now exports
+`OMP_NUM_THREADS=1` by default (overridable) and passes `-x OMP_NUM_THREADS` to
+`mpirun` explicitly so it can't be silently lost. It also warns (without blocking) if
+`NPROC x OMP_NUM_THREADS` exceeds `nproc` for that one invocation, though it has no way
+to see a second config's simultaneous run.
+
+**This revises the runtime estimate in the entry above upward.** Since real runs will
+use `OMP_NUM_THREADS=1`, the correct per-chain slow-block rate is 0.709 evals/s
+(`lcdm_mnu`) / 0.565 evals/s (`w0wa_mnu`, measured the same way) — not the
+unset-thread-count 2.64 / 2.47 evals/s quoted above, which assumed a single
+unconstrained process. Redoing the same 20,000-200,000 proposed-step range:
+
+- **`lcdm_mnu`**: ~8-78 hours per chain (was ~2-21 hours).
+- **`w0wa_mnu`**: ~10-98 hours per chain (was ~2-23 hours), plausibly longer.
+
+**How to apply:** if you have spare cores and are running only one config at a time
+with fewer than 10 MPI ranks, `OMP_NUM_THREADS=2` recovers most of the lost per-chain
+speed at a modest cost in chain count (e.g. 5 ranks x 2 threads instead of 10 ranks x 1
+thread) and is a reasonable choice — but if running two configs simultaneously (8 total
+MPI ranks across both on this 10-core machine, as asked about directly), there isn't
+enough headroom for more than `OMP_NUM_THREADS=1` per rank, which is also the
+throughput-optimal choice per the measurements above.
