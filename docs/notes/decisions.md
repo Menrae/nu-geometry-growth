@@ -60,3 +60,57 @@ wrong package versions, or writes into the wrong project entirely, without any e
 - Before trusting any new-environment install on this machine, verify with
   `python -c "import X; print(X.__file__)"` that the reported file path is actually
   inside the intended env, not a lookalike sitting elsewhere.
+
+## 2026-09-23 — Ordering diagnostics use GetDist's boundary-corrected KDE, not a custom one
+
+`src/nuproj/diagnostics.py` needs a smooth density estimate for the cosmological posterior
+on Sigma m_nu (for the overlap coefficient and the Bayes-factor's Z_H integral). Sigma m_nu
+has a hard physical prior boundary at 0, and the oscillation-informed reference distribution
+has its own hard boundary at the ordering's mass floor (~0.059 eV for NO, ~0.10 eV for IO) —
+an uncorrected KDE would smear probability mass across both boundaries and bias the estimate
+right where these diagnostics are most sensitive (near the floors).
+
+**Why GetDist's own KDE instead of writing one:** `MCSamples.get1DDensity(name, ...)`, given
+a hard `ranges` limit, already applies the Jones (1993)/Jones & Foster (1996) linear boundary
+kernel correction by default (`boundary_correction_order=1`) — confirmed by reading GetDist's
+own source (`getdist/mcsamples.py::get1DDensityGridData`). This is the same, already-vetted
+machinery the cosmology community uses for exactly this class of problem (e.g. Planck's own
+posteriors on `tau`, `r`, `Sigma m_nu`), and GetDist is already a project dependency. Writing
+and validating a from-scratch boundary-corrected KDE (e.g. the reflection method) would
+duplicate well-tested code for no accuracy benefit, and risks a subtly-wrong implementation
+that's harder to trust than reusing GetDist's.
+
+**Note:** `.get1DDensity(...).P` is normalized to peak=1 (GetDist's plotting convention), not
+to integrate to 1 — `diagnostics.py` always renormalizes onto its own evaluation grid via
+`np.trapezoid` before using it as a probability density. Also note this differs slightly from
+Intertwined's own footnote 12, which describes a plain weighted *histogram* for `P_cosmo`
+(no smoothing) in their implementation of the overlap coefficient; we use a smooth
+boundary-corrected KDE instead for both `P_cosmo` and `P_osc^H`, which avoids histogram
+bin-width sensitivity and is more standard practice — validated in `tests/test_diagnostics.py`
+against independent analytic ground truths (truncated-Gaussian CDFs/quantiles via `scipy.stats`,
+and an overlap/Bayes-factor check against `scipy.integrate.quad` on the exact pdfs), not just
+against itself.
+
+**How to apply:** any future density estimate on a physically-bounded cosmological parameter
+in this project should set a hard `ranges` limit on the `MCSamples` object rather than
+building an unbounded KDE and hoping the tails are small.
+
+## 2026-09-23 — Oscillation-informed reference distribution built by Monte Carlo, not inversion
+
+`oscillation_reference_samples()` draws the lightest-mass prior (`U(0, 2) eV`) and maps it
+through the exact NO/IO mass relation (Eqs. 5.4-5.5) via direct simulation, then feeds the
+resulting Sigma m_nu samples through the same boundary-corrected KDE as the cosmological
+chain, rather than analytically inverting the mass relation to get a closed-form density.
+
+**Why:** the forward map is monotonic but the closed-form inverse and its Jacobian, while
+not hard, add a second, differently-shaped implementation to maintain and re-verify; sampling
+and reusing the same KDE path as `P_cosmo` keeps the two distributions treated identically
+end-to-end (same boundary correction, same interpolation grid) and is what
+`tests/test_diagnostics.py::test_log_bayes_factor_matches_analytic_integral` checks *against*
+(that test builds the analytic inversion independently, specifically so the Monte-Carlo path
+in the library proper is verified by a genuinely separate calculation, not by itself).
+
+**How to apply:** if `log_bayes_factor`/`overlap_coefficient` ever need to run inside a tight
+loop (e.g. per-model-per-dataset in a later analysis script), consider caching
+`oscillation_reference_samples()`'s output per hierarchy rather than redrawing it every call —
+it doesn't depend on the cosmological chain at all.
